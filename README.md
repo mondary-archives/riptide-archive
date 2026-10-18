@@ -7,6 +7,7 @@ A polished Go TUI with a startup menu, one-shot speed tests, a live bandwidth mo
 [![terminal](https://img.shields.io/badge/terminal-TUI-39d0d8?style=flat-square)](https://github.com/Foxemsx/riptide)
 [![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev)
 [![Linux](https://img.shields.io/badge/Linux-supported-2ea44f?style=flat-square&logo=linux&logoColor=white)](https://github.com/Foxemsx/riptide)
+[![macOS](https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white)](https://github.com/Foxemsx/riptide)
 [![Windows](https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white)](https://github.com/Foxemsx/riptide)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
@@ -82,9 +83,9 @@ A polished Go TUI with a startup menu, one-shot speed tests, a live bandwidth mo
 
 ## Quick start
 
-### Linux / WSL (installer — no sudo, bash only)
+### Linux / WSL / macOS (installer — no sudo, bash only)
 
-> The `install.sh` script is **Linux-only**. It re-execs under bash and, if no
+> On Linux and macOS, `install.sh` re-execs under bash and, if no
 > suitable Go toolchain is present, downloads one locally — it never touches
 > your system `go` or needs root.
 
@@ -207,7 +208,7 @@ Speed tests are stored in **SQLite** as `riptide.db`:
 
 ## Uninstall
 
-**Linux / WSL**
+**Linux / WSL / macOS**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Foxemsx/riptide/main/uninstall.sh | sh

@@ -6,10 +6,11 @@
 #   make install    go install into GOBIN
 #   make test       run go tests
 #   make clean      remove local build artifacts
-#   make dist       cross-compile all 6 release archives (+ checksums.txt)
+#   make dist       cross-compile all 8 release archives (+ checksums.txt)
 #
 # Release matrix (GOOS/GOARCH):
 #   linux/amd64    linux/arm64
+#   darwin/amd64   darwin/arm64
 #   windows/amd64  windows/arm64
 #
 # Archives: .tar.gz for unix, .zip for windows. Each contains the binary
@@ -23,6 +24,7 @@ DIST     := dist
 
 # Build environments: <os>/<arch> pairs.
 TARGETS := linux/amd64  linux/arm64 \
+           darwin/amd64 darwin/arm64 \
            windows/amd64 windows/arm64
 
 .PHONY: all build install test clean dist

@@ -1,6 +1,6 @@
 name: release
 
-# Build all 6 release archives whenever a v* tag is pushed, then attach
+# Build all 8 release archives whenever a v* tag is pushed, then attach
 # them (plus checksums.txt) to a GitHub Release.
 on:
   push:
