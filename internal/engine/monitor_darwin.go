@@ -5,7 +5,6 @@ package engine
 import (
 	"context"
 	"encoding/binary"
-	"net"
 	"strings"
 	"time"
 	"unsafe"
@@ -19,10 +18,14 @@ import (
 // upload throughput of the whole machine from byte deltas between samples.
 // It runs until ctx is cancelled.
 //
-// Source: the NET_RT_IFLIST2 routing sysctl. It dumps one RTM_IFINFO2
-// message per interface, each carrying a struct if_msghdr2 whose ifm_data
-// (if_data64) holds cumulative 64-bit received (ifi_ibytes) and sent
-// (ifi_obytes) octets.
+// Source: the net.link.generic.ifdata.<index>.1 sysctl (IFDATA_GENERAL).
+// Each call returns a struct ifmibdata whose ifmd_data (if_data64) holds
+// cumulative 64-bit received (ifi_ibytes) and sent (ifi_obytes) octets.
+//
+// This sysctl is used instead of the NET_RT_IFLIST2 routing dump because
+// the latter quantises counters to 1 KiB steps and truncates them to 32
+// bits for non-Apple-signed processes (anti-fingerprinting; see
+// rdar://106029568), which would corrupt the rates.
 //
 // Scope: every "up" interface except loopback is summed, so the numbers
 // reflect total machine throughput (Wi-Fi, Ethernet, VPN, LAN, ...).
@@ -78,73 +81,63 @@ func RunMonitor(ctx context.Context, p *Progress, sampleInterval time.Duration) 
 	}
 }
 
-const darwinIFTLoop = 24 // IFT_LOOP from <net/if_types.h> (loopback)
+const (
+	darwinIFTLoop       = 24 // IFT_LOOP from <net/if_types.h> (loopback)
+	darwinIfdataGeneral = 1  // IFDATA_GENERAL selector
 
-// Field offsets inside the kernel's struct if_msghdr2 / if_data64. They are
-// derived from the cgo-mirrored unix.IfMsghdr2 (whose layout is generated
-// from the SDK headers), so they follow the real kernel ABI — including the
-// alignment padding that a packed decoder like encoding/binary would skip.
-var (
-	darwinOffFlags  = unsafe.Offsetof(unix.IfMsghdr2{}.Flags)
-	darwinOffIndex  = unsafe.Offsetof(unix.IfMsghdr2{}.Index)
-	darwinOffData   = unsafe.Offsetof(unix.IfMsghdr2{}.Data)
-	darwinOffType   = darwinOffData + unsafe.Offsetof(unix.IfData64{}.Type)
-	darwinOffIbytes = darwinOffData + unsafe.Offsetof(unix.IfData64{}.Ibytes)
-	darwinOffObytes = darwinOffData + unsafe.Offsetof(unix.IfData64{}.Obytes)
+	// Offsets of the fixed header fields of the kernel's struct ifmibdata
+	// (<net/if_mib.h>): ifmd_name[IFNAMSIZ] then ifmd_pcount, ifmd_flags.
+	darwinOffName  = 0
+	darwinOffFlags = 20
+
+	// Offsets inside struct if_data64, taken from the cgo-generated
+	// unix.IfData64 (its layout is generated from the SDK headers and thus
+	// matches the kernel ABI field-for-field).
+	darwinOffIfType   = int(unsafe.Offsetof(unix.IfData64{}.Type))
+	darwinOffIfIbytes = int(unsafe.Offsetof(unix.IfData64{}.Ibytes))
+	darwinOffIfObytes = int(unsafe.Offsetof(unix.IfData64{}.Obytes))
+	darwinSizeIfData  = int(unsafe.Sizeof(unix.IfData64{}))
 )
 
 // readCountersDarwin reads cumulative rx/tx byte counters for every up,
-// non-loopback interface from the NET_RT_IFLIST2 routing sysctl. When seen
-// is non-nil it is populated with the counters; it always returns the full
-// map and the interface names.
+// non-loopback interface. When seen is non-nil it is populated with the
+// counters; it always returns the full map and the interface names.
+//
+// Note on layout: the kernel (xnu) packs the trailing if_data64 block right
+// after the header fields, while the userland SDK header pads it to an
+// 8-byte boundary — the sysctl therefore returns 180 bytes, not the 184 the
+// SDK struct suggests. Instead of assuming an offset, the if_data64 block
+// is located at the end of the reply (len - sizeof(if_data64)), which keeps
+// the parser correct on either layout. Values were verified to match
+// netstat -ib byte for byte.
 func readCountersDarwin(seen map[string]counters) (map[string]counters, []string) {
 	total := map[string]counters{}
 	var names []string
 
-	// MIB: CTL_NET, PF_ROUTE, protocol 0, extra 0, NET_RT_IFLIST2, seq 0.
-	rib, err := unix.SysctlRaw("net", unix.AF_ROUTE, 0, 0, unix.NET_RT_IFLIST2, 0)
-	if err != nil {
-		return total, names
-	}
-
-	for off, n := 0, len(rib); off+4 <= n; {
-		msglen := int(binary.LittleEndian.Uint16(rib[off : off+2]))
-		if msglen < 4 || off+msglen > n {
-			break // malformed trailer; keep what we collected so far
+	for idx := 1; ; idx++ {
+		raw, err := unix.SysctlRaw("net.link.generic.ifdata", idx, darwinIfdataGeneral)
+		if err != nil {
+			break // past the highest interface index; we are done
 		}
-		msg := rib[off : off+msglen]
-		off += msglen
-
-		// Only interface-info messages are of interest here.
-		if msg[2] != unix.RTM_VERSION || msg[3] != unix.RTM_IFINFO2 {
-			continue
-		}
-		if len(msg) <= int(darwinOffObytes)+8 {
-			continue // shorter than a full if_msghdr2; skip
+		base := len(raw) - darwinSizeIfData
+		if base < darwinOffFlags+4 || len(raw) < darwinSizeIfData {
+			continue // unexpected kernel ABI; skip rather than misread
 		}
 
-		flags := int32(binary.LittleEndian.Uint32(msg[darwinOffFlags:]))
-		name := ifNameFromMessage(msg, int(darwinOffData))
-		if name == "" {
-			// Fall back to the interfaces table if the message carried
-			// no AF_LINK address (should not happen for RTM_IFINFO2).
-			idx := binary.LittleEndian.Uint16(msg[darwinOffIndex:])
-			if iface, err := net.InterfaceByIndex(int(idx)); err == nil {
-				name = iface.Name
-			}
-		}
+		name := strings.TrimRight(string(raw[darwinOffName:darwinOffName+16]), "\x00")
 		if name == "" || name == "lo0" {
 			continue
 		}
+		flags := binary.LittleEndian.Uint32(raw[darwinOffFlags:])
 		if flags&unix.IFF_UP == 0 {
 			continue // not operationally up
 		}
-		if msg[darwinOffType] == darwinIFTLoop {
+		if raw[base+darwinOffIfType] == darwinIFTLoop {
 			continue
 		}
 
-		rx := binary.LittleEndian.Uint64(msg[darwinOffIbytes:])
-		tx := binary.LittleEndian.Uint64(msg[darwinOffObytes:])
+		rx := binary.LittleEndian.Uint64(raw[base+darwinOffIfIbytes:])
+		tx := binary.LittleEndian.Uint64(raw[base+darwinOffIfObytes:])
 		c := counters{rx: rx, tx: tx}
 		total[name] = c
 		if seen != nil {
@@ -153,27 +146,6 @@ func readCountersDarwin(seen map[string]counters) (map[string]counters, []string
 		names = append(names, name)
 	}
 	return total, names
-}
-
-// ifNameFromMessage extracts the interface name from the AF_LINK sockaddr
-// that follows the if_msghdr2 header in a routing message. The name is the
-// first sdl_nlen bytes of sockaddr_dl's sdl_data (e.g. "en0", "utun3").
-func ifNameFromMessage(msg []byte, start int) string {
-	for off := start; off+8 <= len(msg); {
-		saLen := int(msg[off])
-		if saLen < 8 || off+saLen > len(msg) {
-			return ""
-		}
-		if msg[off+1] == unix.AF_LINK {
-			nlen := int(msg[off+5]) // sdl_nlen
-			if 8+nlen <= saLen {
-				return string(msg[off+8 : off+8+nlen])
-			}
-			return ""
-		}
-		off += (saLen + 3) &^ 3 // sockaddrs are padded to 4-byte boundaries
-	}
-	return ""
 }
 
 // discoverAdaptersDarwin returns a friendly comma-separated label of the up,

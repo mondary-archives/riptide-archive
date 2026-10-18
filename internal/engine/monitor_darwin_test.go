@@ -10,7 +10,7 @@ import (
 func TestReadCountersDarwin(t *testing.T) {
 	total, names := readCountersDarwin(nil)
 	if len(total) == 0 {
-		t.Skip("no active interfaces reported by the ifmib sysctl")
+		t.Skip("no active interfaces reported by the ifdata sysctl")
 	}
 	for _, name := range names {
 		if name == "lo0" {
@@ -30,15 +30,5 @@ func TestReadCountersDarwin(t *testing.T) {
 			t.Errorf("%s counters went backwards: rx %d -> %d, tx %d -> %d",
 				name, c.rx, c2.rx, c.tx, c2.tx)
 		}
-	}
-}
-
-// macOS ifmib counters are 32-bit and wrap around ~4 GiB; safeDelta must
-// bridge a wrap that happens between two samples.
-func TestSafeDeltaHandles32BitWrap(t *testing.T) {
-	const before = uint64(0xffffff00)
-	const after = uint64(0x00000100) // wrapped past 2^32
-	if got := safeDelta(before, after); got != 0x200 {
-		t.Errorf("safeDelta(0x%x, 0x%x) = 0x%x, want 0x200", before, after, got)
 	}
 }

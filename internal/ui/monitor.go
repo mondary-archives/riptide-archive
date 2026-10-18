@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Foxemsx/riptide/internal/engine"
+	apptheme "github.com/Foxemsx/riptide/internal/theme"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/Foxemsx/riptide/internal/engine"
-	apptheme "github.com/Foxemsx/riptide/internal/theme"
 )
 
 // monitorModel is the live Bandwidth Monitor card.
@@ -115,6 +115,11 @@ func (m *monitorModel) Update(msg tea.Msg) (tea.Cmd, bool) {
 		return listenCmd(m.events), false
 
 	case sampleMsg:
+		// Pick up the source label even if the PhaseConnected phaseMsg was
+		// dropped on startup (the phases channel is non-blocking).
+		if m.serverName == "" && m.progress.ServerName != "" {
+			m.serverName = m.progress.ServerName
+		}
 		if !m.paused {
 			mbps := engine.BytesPerSecToMbps(msg.sample.Rate)
 			switch msg.sample.Phase {
